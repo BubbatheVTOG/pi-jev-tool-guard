@@ -14,7 +14,8 @@ const state: GuardState = {
 };
 
 function config(overrides: Record<string, unknown> = {}) {
-  return resolveToolGuardConfig({ globalSettings: { toolGuard: overrides } }).config;
+  return resolveToolGuardConfig({ globalSettings: { toolGuard: overrides } })
+    .config;
 }
 
 function response(values: Partial<Record<string, number>> = {}) {
@@ -28,7 +29,13 @@ function response(values: Partial<Record<string, number>> = {}) {
       destructiveChange: noul("destructiveChange"),
       externalImpact: noul("externalImpact"),
       hardToReverse: noul("hardToReverse"),
-      severity: { type: "score", score: values.severity ?? 0.2, confidence: 0.9, legend: {}, probabilities: {} },
+      severity: {
+        type: "score",
+        score: values.severity ?? 0.2,
+        confidence: 0.9,
+        legend: {},
+        probabilities: {},
+      },
     },
     usage: { input_tokens: 10, output_tokens: 10 },
   };
@@ -52,7 +59,10 @@ test("allows a low-risk assessed call and forwards model, timeout, and state", a
   assert.equal(result.decision, "allow");
   assert.equal(result.highRisk, false);
   assert.deepEqual(result.triggered, []);
-  assert.deepEqual(capturedOptions, { timeout: 2000, retry: { maxRetries: 0 } });
+  assert.deepEqual(capturedOptions, {
+    timeout: 2000,
+    retry: { maxRetries: 0 },
+  });
   assert.equal((capturedRequest as { model: string }).model, "jev-latest");
 });
 
@@ -61,17 +71,25 @@ test("requires confirmation when any hazard or severity crosses review policy", 
     state,
     config: config(),
     apiKey: "test-key",
-    systemOne: async () => response({ destructiveChange: 0.82, externalImpact: 0.5, severity: 2.2 }),
+    systemOne: async () =>
+      response({ destructiveChange: 0.82, externalImpact: 0.5, severity: 2.2 }),
   });
 
   assert.equal(result.decision, "confirm");
   assert.equal(result.highRisk, true);
-  assert.deepEqual(result.triggered.map((risk) => risk.id), ["destructiveChange", "externalImpact"]);
+  assert.deepEqual(
+    result.triggered.map((risk) => risk.id),
+    ["destructiveChange", "externalImpact"],
+  );
   assert.equal(result.severity, 2.2);
 });
 
 test("fails open when the API key is missing", async () => {
-  const result = await evaluateToolRisk({ state, config: config(), apiKey: "" });
+  const result = await evaluateToolRisk({
+    state,
+    config: config(),
+    apiKey: "",
+  });
 
   assert.deepEqual(result, {
     status: "unavailable",
@@ -92,7 +110,13 @@ test("supports an explicit fail-closed override", async () => {
 });
 
 for (const [name, run, expected] of [
-  ["request errors", async () => { throw new Error("private service details"); }, "request_failed"],
+  [
+    "request errors",
+    async () => {
+      throw new Error("private service details");
+    },
+    "request_failed",
+  ],
   ["invalid responses", async () => ({ answers: {} }), "invalid_response"],
 ] as const) {
   test(`${name} fail open without exposing service details`, async () => {

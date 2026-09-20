@@ -95,6 +95,7 @@ Built-in defaults:
 ```json
 {
   "toolGuard": {
+    "disable": false,
     "enabled": true,
     "protectedTools": ["bash", "write", "edit"],
     "model": "jev-latest",
@@ -133,6 +134,10 @@ Settings merge in this order:
 1. plugin defaults;
 2. global `settings.json` overrides;
 3. trusted-project `.pi/settings.json` overrides.
+
+Set `disable` to `true` to bypass the guard explicitly. A missing or blank API
+key no longer disables the plugin; evaluation follows `evaluatorFailure` until a
+credential is available. `enabled` remains supported for compatibility.
 
 Nested objects merge by field. Arrays replace instead of append. Unknown keys,
 invalid types, duplicate list entries, and invalid threshold relationships are

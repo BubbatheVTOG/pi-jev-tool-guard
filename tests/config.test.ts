@@ -12,23 +12,46 @@ import {
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((path) => rm(path, { force: true, recursive: true })),
+  );
 });
 
 test("uses complete immutable defaults when settings are absent", () => {
   const resolved = resolveToolGuardConfig();
 
   assert.deepEqual(resolved.config, {
+    disable: false,
     enabled: true,
     protectedTools: ["bash", "write", "edit"],
     model: "jev-latest",
     timeoutMs: 2000,
     evaluatorFailure: "allow",
     headlessRisk: "block",
-    thresholds: { reviewProbability: 0.35, highRiskProbability: 0.7, severityReview: 1 },
-    context: { recentMessages: 6, maxCharacters: 12_000, redactSecrets: true, includeToolResults: false },
-    rules: { protectedPaths: [], allowedPaths: [], alwaysConfirmCommands: [], allowedCommands: [] },
-    notifications: { showAllowed: false, showEvaluatorFailures: true, showProjectOverride: true },
+    thresholds: {
+      reviewProbability: 0.35,
+      highRiskProbability: 0.7,
+      severityReview: 1,
+    },
+    context: {
+      recentMessages: 6,
+      maxCharacters: 12_000,
+      redactSecrets: true,
+      includeToolResults: false,
+    },
+    rules: {
+      protectedPaths: [],
+      allowedPaths: [],
+      alwaysConfirmCommands: [],
+      allowedCommands: [],
+    },
+    notifications: {
+      showAllowed: false,
+      showEvaluatorFailures: true,
+      showProjectOverride: true,
+    },
     projectOverrides: "full",
   });
   assert.equal(Object.isFrozen(DEFAULT_CONFIG), true);
@@ -37,9 +60,20 @@ test("uses complete immutable defaults when settings are absent", () => {
   assert.equal(resolved.provenance["thresholds.reviewProbability"], "default");
 });
 
+test("supports an explicit disable setting", () => {
+  const resolved = resolveToolGuardConfig({
+    globalSettings: { toolGuard: { disable: true } },
+  });
+
+  assert.equal(resolved.config.disable, true);
+  assert.equal(resolved.provenance.disable, "global");
+});
+
 test("deep-merges partial global settings over defaults", () => {
   const resolved = resolveToolGuardConfig({
-    globalSettings: { toolGuard: { timeoutMs: 3000, thresholds: { reviewProbability: 0.4 } } },
+    globalSettings: {
+      toolGuard: { timeoutMs: 3000, thresholds: { reviewProbability: 0.4 } },
+    },
   });
 
   assert.equal(resolved.config.timeoutMs, 3000);
@@ -50,7 +84,10 @@ test("deep-merges partial global settings over defaults", () => {
   });
   assert.equal(resolved.provenance.timeoutMs, "global");
   assert.equal(resolved.provenance["thresholds.reviewProbability"], "global");
-  assert.equal(resolved.provenance["thresholds.highRiskProbability"], "default");
+  assert.equal(
+    resolved.provenance["thresholds.highRiskProbability"],
+    "default",
+  );
 });
 
 test("arrays replace defaults rather than append", () => {
@@ -72,7 +109,13 @@ test("arrays replace defaults rather than append", () => {
 test("trusted projects may fully override and weaken global policy", () => {
   const resolved = resolveToolGuardConfig({
     globalSettings: { toolGuard: { enabled: true, evaluatorFailure: "block" } },
-    projectSettings: { toolGuard: { enabled: false, evaluatorFailure: "allow", protectedTools: [] } },
+    projectSettings: {
+      toolGuard: {
+        enabled: false,
+        evaluatorFailure: "allow",
+        protectedTools: [],
+      },
+    },
     projectTrusted: true,
   });
 
@@ -106,19 +149,33 @@ test("rejects unknown, malformed, duplicate, and out-of-range settings", () => {
     /unknown setting global\.toolGuard\.surprise/,
   );
   assert.throws(
-    () => parseToolGuardOverride({ toolGuard: { timeoutMs: "slow" } }, "global"),
+    () =>
+      parseToolGuardOverride({ toolGuard: { timeoutMs: "slow" } }, "global"),
     /timeoutMs must be an integer/,
   );
   assert.throws(
-    () => parseToolGuardOverride({ toolGuard: { protectedTools: ["bash", "bash"] } }, "global"),
+    () =>
+      parseToolGuardOverride(
+        { toolGuard: { protectedTools: ["bash", "bash"] } },
+        "global",
+      ),
     /must not contain duplicates/,
   );
   assert.throws(
-    () => parseToolGuardOverride({ toolGuard: { protectedTools: ["read"] } }, "global"),
+    () =>
+      parseToolGuardOverride(
+        { toolGuard: { protectedTools: ["read"] } },
+        "global",
+      ),
     /contains unsupported tool/,
   );
   assert.throws(
-    () => resolveToolGuardConfig({ globalSettings: { toolGuard: { thresholds: { reviewProbability: 0.8 } } } }),
+    () =>
+      resolveToolGuardConfig({
+        globalSettings: {
+          toolGuard: { thresholds: { reviewProbability: 0.8 } },
+        },
+      }),
     /reviewProbability must not exceed highRiskProbability/,
   );
 });
@@ -130,14 +187,27 @@ test("loads global and trusted project files with sanitized errors", async () =>
   const cwd = join(root, "project");
   await mkdir(join(cwd, ".pi"), { recursive: true });
   await mkdir(agentDir, { recursive: true });
-  await writeFile(join(agentDir, "settings.json"), JSON.stringify({ toolGuard: { timeoutMs: 2500 } }));
-  await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ toolGuard: { timeoutMs: 3500 } }));
+  await writeFile(
+    join(agentDir, "settings.json"),
+    JSON.stringify({ toolGuard: { timeoutMs: 2500 } }),
+  );
+  await writeFile(
+    join(cwd, ".pi", "settings.json"),
+    JSON.stringify({ toolGuard: { timeoutMs: 3500 } }),
+  );
 
-  const resolved = await loadToolGuardConfig({ cwd, projectTrusted: true, agentDir });
+  const resolved = await loadToolGuardConfig({
+    cwd,
+    projectTrusted: true,
+    agentDir,
+  });
   assert.equal(resolved.config.timeoutMs, 3500);
   assert.equal(resolved.provenance.timeoutMs, "project");
 
-  await writeFile(join(agentDir, "settings.json"), '{"private":"do-not-print",');
+  await writeFile(
+    join(agentDir, "settings.json"),
+    '{"private":"do-not-print",',
+  );
   await assert.rejects(
     loadToolGuardConfig({ cwd, projectTrusted: true, agentDir }),
     (error: unknown) => {

@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   CONFIG_DIR_NAME,
@@ -21,18 +29,30 @@ export type ToolGuardCommandAction = "status" | "edit-global" | "edit-project";
 export interface ToolGuardCommandContext {
   cwd: string;
   isProjectTrusted(): boolean;
-  ui: Pick<ExtensionCommandContext["ui"], "confirm" | "editor" | "notify" | "setStatus">;
+  ui: Pick<
+    ExtensionCommandContext["ui"],
+    "confirm" | "editor" | "notify" | "setStatus"
+  >;
 }
 
-export function registerToolGuardCommand(pi: Pick<ExtensionAPI, "registerCommand">): void {
+export function registerToolGuardCommand(
+  pi: Pick<ExtensionAPI, "registerCommand">,
+): void {
   pi.registerCommand("tool-guard", {
     description: "Inspect or edit Tool Guard policy overrides",
     getArgumentCompletions: (prefix) => {
-      const actions: ToolGuardCommandAction[] = ["status", "edit-global", "edit-project"];
+      const actions: ToolGuardCommandAction[] = [
+        "status",
+        "edit-global",
+        "edit-project",
+      ];
       const matches = actions.filter((action) => action.startsWith(prefix));
-      return matches.length > 0 ? matches.map((value) => ({ value, label: value })) : null;
+      return matches.length > 0
+        ? matches.map((value) => ({ value, label: value }))
+        : null;
     },
-    handler: async (args, ctx) => runToolGuardCommand(normalizeAction(args), ctx),
+    handler: async (args, ctx) =>
+      runToolGuardCommand(normalizeAction(args), ctx),
   });
 }
 
@@ -47,29 +67,40 @@ export async function runToolGuardCommand(
     return;
   }
   if (action === "edit-project" && !ctx.isProjectTrusted()) {
-    ctx.ui.notify("Tool Guard project overrides require a trusted project.", "error");
+    ctx.ui.notify(
+      "Tool Guard project overrides require a trusted project.",
+      "error",
+    );
     return;
   }
 
   const source: ConfigSource = action === "edit-global" ? "global" : "project";
-  const path = source === "global"
-    ? join(agentDir, "settings.json")
-    : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
+  const path =
+    source === "global"
+      ? join(agentDir, "settings.json")
+      : join(ctx.cwd, CONFIG_DIR_NAME, "settings.json");
   let document: SettingsDocument;
   let edited: string | undefined;
   try {
     document = await readSettingsDocument(path, source);
-    const current = isRecord(document.settings.toolGuard) ? document.settings.toolGuard : {};
+    const current = isRecord(document.settings.toolGuard)
+      ? document.settings.toolGuard
+      : {};
     edited = await ctx.ui.editor(
       `Tool Guard ${source} override`,
       `${JSON.stringify(current, null, 2)}\n`,
     );
   } catch {
-    ctx.ui.notify(`Unable to read Tool Guard ${source} settings; no settings were changed.`, "error");
+    ctx.ui.notify(
+      `Unable to read Tool Guard ${source} settings; no settings were changed.`,
+      "error",
+    );
     return;
   }
   if (edited === undefined) return;
-  const current = isRecord(document.settings.toolGuard) ? document.settings.toolGuard : {};
+  const current = isRecord(document.settings.toolGuard)
+    ? document.settings.toolGuard
+    : {};
 
   let override: Record<string, unknown>;
   try {
@@ -78,7 +109,10 @@ export async function runToolGuardCommand(
     override = parsed;
     parseToolGuardOverride({ toolGuard: override }, source);
   } catch {
-    ctx.ui.notify(`Tool Guard ${source} override is invalid; no settings were changed.`, "error");
+    ctx.ui.notify(
+      `Tool Guard ${source} override is invalid; no settings were changed.`,
+      "error",
+    );
     return;
   }
 
@@ -95,16 +129,33 @@ export async function runToolGuardCommand(
   if (Object.keys(override).length === 0) delete document.settings.toolGuard;
   else document.settings.toolGuard = override;
   try {
-    const written = await writeSettingsDocument(path, document.settings, document.revision);
+    const written = await writeSettingsDocument(
+      path,
+      document.settings,
+      document.revision,
+    );
     if (!written) {
-      ctx.ui.notify(`Tool Guard ${source} settings changed while the editor was open; no settings were written.`, "error");
+      ctx.ui.notify(
+        `Tool Guard ${source} settings changed while the editor was open; no settings were written.`,
+        "error",
+      );
       return;
     }
-    const resolved = await loadToolGuardConfig({ cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted(), agentDir });
+    const resolved = await loadToolGuardConfig({
+      cwd: ctx.cwd,
+      projectTrusted: ctx.isProjectTrusted(),
+      agentDir,
+    });
     updateGuardStatus(ctx, resolved.config, process.env.TYPESAFE_API_KEY);
-    ctx.ui.notify(`Saved Tool Guard ${source} override. New tool calls use it immediately.`, "info");
+    ctx.ui.notify(
+      `Saved Tool Guard ${source} override. New tool calls use it immediately.`,
+      "info",
+    );
   } catch {
-    ctx.ui.notify(`Unable to save Tool Guard ${source} override; existing settings were preserved.`, "error");
+    ctx.ui.notify(
+      `Unable to save Tool Guard ${source} override; existing settings were preserved.`,
+      "error",
+    );
   }
 }
 
@@ -113,23 +164,41 @@ export function formatToolGuardStatus(
   apiKeyPresent: boolean,
 ): string {
   const lines = [
-    `Tool Guard: ${resolved.config.enabled ? "enabled" : "disabled"}`,
+    `Tool Guard: ${resolved.config.disable || !resolved.config.enabled ? "disabled" : "enabled"}`,
     `Jev credential: ${apiKeyPresent ? "present" : "missing (evaluatorFailure applies)"}`,
     `Trusted project override: ${resolved.projectOverrideApplied ? "applied" : "not applied"}`,
     "",
   ];
   for (const [path, value] of flattenConfig(resolved.config)) {
-    lines.push(`${path} = ${JSON.stringify(redactSecrets(value))} [${resolved.provenance[path] ?? "default"}]`);
+    lines.push(
+      `${path} = ${JSON.stringify(redactSecrets(value))} [${resolved.provenance[path] ?? "default"}]`,
+    );
   }
   return lines.join("\n");
 }
 
-async function showStatus(ctx: ToolGuardCommandContext, agentDir: string): Promise<void> {
+async function showStatus(
+  ctx: ToolGuardCommandContext,
+  agentDir: string,
+): Promise<void> {
   try {
-    const resolved = await loadToolGuardConfig({ cwd: ctx.cwd, projectTrusted: ctx.isProjectTrusted(), agentDir });
-    ctx.ui.notify(formatToolGuardStatus(resolved, Boolean(process.env.TYPESAFE_API_KEY?.trim())), "info");
+    const resolved = await loadToolGuardConfig({
+      cwd: ctx.cwd,
+      projectTrusted: ctx.isProjectTrusted(),
+      agentDir,
+    });
+    ctx.ui.notify(
+      formatToolGuardStatus(
+        resolved,
+        Boolean(process.env.TYPESAFE_API_KEY?.trim()),
+      ),
+      "info",
+    );
   } catch {
-    ctx.ui.notify("Tool Guard settings are invalid. Protected calls are blocked until they are corrected.", "error");
+    ctx.ui.notify(
+      "Tool Guard settings are invalid. Protected calls are blocked until they are corrected.",
+      "error",
+    );
   }
 }
 
@@ -144,7 +213,10 @@ interface SettingsDocument {
   revision: string | null;
 }
 
-async function readSettingsDocument(path: string, source: ConfigSource): Promise<SettingsDocument> {
+async function readSettingsDocument(
+  path: string,
+  source: ConfigSource,
+): Promise<SettingsDocument> {
   const text = await readSettingsRevision(path);
   if (text === null) return { settings: {}, revision: null };
 
@@ -177,8 +249,11 @@ async function writeSettingsDocument(
   const lockPath = `${path}.tool-guard.lock`;
   const lock = await open(lockPath, "wx", 0o600);
   try {
-    await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, { flag: "wx", mode });
-    if (await readSettingsRevision(path) !== expectedRevision) return false;
+    await writeFile(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, {
+      flag: "wx",
+      mode,
+    });
+    if ((await readSettingsRevision(path)) !== expectedRevision) return false;
     await rename(temporaryPath, path);
     return true;
   } finally {
@@ -187,8 +262,12 @@ async function writeSettingsDocument(
       rm(temporaryPath, { force: true }),
       rm(lockPath, { force: true }),
     ]);
-    if ([...closed, ...cleanup].some((result) => result.status === "rejected")) {
-      throw new Error("tool-guard: unable to clean up the settings transaction");
+    if (
+      [...closed, ...cleanup].some((result) => result.status === "rejected")
+    ) {
+      throw new Error(
+        "tool-guard: unable to clean up the settings transaction",
+      );
     }
   }
 }
@@ -202,11 +281,15 @@ async function existingMode(path: string): Promise<number> {
   }
 }
 
-function flattenConfig(value: Record<string, unknown> | object, prefix = ""): Array<[string, unknown]> {
+function flattenConfig(
+  value: Record<string, unknown> | object,
+  prefix = "",
+): Array<[string, unknown]> {
   const entries: Array<[string, unknown]> = [];
   for (const [key, child] of Object.entries(value)) {
     const path = prefix ? `${prefix}.${key}` : key;
-    if (isRecord(child) && !Array.isArray(child)) entries.push(...flattenConfig(child, path));
+    if (isRecord(child) && !Array.isArray(child))
+      entries.push(...flattenConfig(child, path));
     else entries.push([path, child]);
   }
   return entries;

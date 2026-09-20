@@ -14,7 +14,8 @@ export const GUARD_QUESTIONS = {
     "Does `pendingTool` conflict with or go beyond the user's objective in `userObjective` and `recentConversation`?",
     {
       true: "The operation is unrelated, contradictory, or materially broader than the user's stated objective.",
-      false: "The operation is a reasonable and necessary step toward the user's stated objective.",
+      false:
+        "The operation is a reasonable and necessary step toward the user's stated objective.",
     },
   ),
   excessiveScope: noul(
@@ -35,21 +36,24 @@ export const GUARD_QUESTIONS = {
     "Could `pendingTool` delete data, overwrite substantial content, rewrite history, damage configuration, or make a disruptive system change?",
     {
       true: "The operation is destructive or could cause meaningful data or configuration loss.",
-      false: "The operation is non-destructive or limited to an ordinary recoverable edit.",
+      false:
+        "The operation is non-destructive or limited to an ordinary recoverable edit.",
     },
   ),
   externalImpact: noul(
     "Could `pendingTool` publish, deploy, push, install globally, change shared remote state, or affect systems outside the current working copy?",
     {
       true: "The operation affects shared, remote, published, deployed, privileged, or machine-wide state.",
-      false: "The operation remains local to the current working copy and user scope.",
+      false:
+        "The operation remains local to the current working copy and user scope.",
     },
   ),
   hardToReverse: noul(
     "Would recovering from an incorrect `pendingTool` operation be difficult, incomplete, costly, or require unavailable backups?",
     {
       true: "The operation is irreversible or expensive to recover from.",
-      false: "The operation is readily reversible with normal source control or local file recovery.",
+      false:
+        "The operation is readily reversible with normal source control or local file recovery.",
     },
   ),
   severity: score(
@@ -64,7 +68,11 @@ export const GUARD_QUESTIONS = {
 };
 
 type GuardQuestionId = Exclude<keyof typeof GUARD_QUESTIONS, "severity">;
-export type EvaluationFailure = "missing_api_key" | "cancelled" | "request_failed" | "invalid_response";
+export type EvaluationFailure =
+  | "missing_api_key"
+  | "cancelled"
+  | "request_failed"
+  | "invalid_response";
 export type EvaluationDecision = "allow" | "confirm" | "block";
 
 export interface TriggeredRisk {
@@ -83,7 +91,10 @@ export interface RiskEvaluation {
 }
 
 type GuardRequest = SystemOneRequest<typeof GUARD_QUESTIONS>;
-type SystemOneCall = (request: GuardRequest, options?: RequestOptions) => PromiseLike<unknown>;
+type SystemOneCall = (
+  request: GuardRequest,
+  options?: RequestOptions,
+) => PromiseLike<unknown>;
 
 export async function evaluateToolRisk(options: {
   state: GuardState;
@@ -116,18 +127,30 @@ export async function evaluateToolRisk(options: {
       requestOptions,
     );
   } catch {
-    return unavailable(options.config, options.signal?.aborted ? "cancelled" : "request_failed");
+    return unavailable(
+      options.config,
+      options.signal?.aborted ? "cancelled" : "request_failed",
+    );
   }
 
   const parsed = parseResponse(response);
   if (!parsed) return unavailable(options.config, "invalid_response");
 
   const triggered = parsed.risks
-    .filter((risk) => risk.probability >= options.config.thresholds.reviewProbability)
+    .filter(
+      (risk) => risk.probability >= options.config.thresholds.reviewProbability,
+    )
     .sort((left, right) => right.probability - left.probability);
-  const topProbability = parsed.risks.reduce((highest, risk) => Math.max(highest, risk.probability), 0);
-  const review = triggered.length > 0 || parsed.severity >= options.config.thresholds.severityReview;
-  const highRisk = topProbability >= options.config.thresholds.highRiskProbability || parsed.severity >= 2;
+  const topProbability = parsed.risks.reduce(
+    (highest, risk) => Math.max(highest, risk.probability),
+    0,
+  );
+  const review =
+    triggered.length > 0 ||
+    parsed.severity >= options.config.thresholds.severityReview;
+  const highRisk =
+    topProbability >= options.config.thresholds.highRiskProbability ||
+    parsed.severity >= 2;
   return {
     status: "evaluated",
     decision: review ? "confirm" : "allow",
@@ -138,7 +161,10 @@ export async function evaluateToolRisk(options: {
   };
 }
 
-function createSystemOneCall(apiKey: string, config: ToolGuardConfig): SystemOneCall {
+function createSystemOneCall(
+  apiKey: string,
+  config: ToolGuardConfig,
+): SystemOneCall {
   const client = new TypeSafeClient({
     apiKey,
     defaultModel: config.model,
@@ -149,7 +175,10 @@ function createSystemOneCall(apiKey: string, config: ToolGuardConfig): SystemOne
   return (request, requestOptions) => client.systemOne(request, requestOptions);
 }
 
-function unavailable(config: ToolGuardConfig, failure: EvaluationFailure): RiskEvaluation {
+function unavailable(
+  config: ToolGuardConfig,
+  failure: EvaluationFailure,
+): RiskEvaluation {
   return {
     status: "unavailable",
     decision: config.evaluatorFailure === "allow" ? "allow" : "block",
@@ -159,21 +188,37 @@ function unavailable(config: ToolGuardConfig, failure: EvaluationFailure): RiskE
   };
 }
 
-function parseResponse(response: unknown): {
-  model: string;
-  severity: number;
-  risks: TriggeredRisk[];
-} | undefined {
-  if (!isRecord(response) || typeof response.model !== "string" || !isRecord(response.answers)) return undefined;
+function parseResponse(response: unknown):
+  | {
+      model: string;
+      severity: number;
+      risks: TriggeredRisk[];
+    }
+  | undefined {
+  if (
+    !isRecord(response) ||
+    typeof response.model !== "string" ||
+    !isRecord(response.answers)
+  )
+    return undefined;
   const severityAnswer = response.answers.severity;
-  if (!isRecord(severityAnswer) || severityAnswer.type !== "score" || !isRangeNumber(severityAnswer.score, 0, 3)) {
+  if (
+    !isRecord(severityAnswer) ||
+    severityAnswer.type !== "score" ||
+    !isRangeNumber(severityAnswer.score, 0, 3)
+  ) {
     return undefined;
   }
 
   const risks: TriggeredRisk[] = [];
   for (const id of guardQuestionIds()) {
     const answer = response.answers[id];
-    if (!isRecord(answer) || answer.type !== "noul" || !isRangeNumber(answer.noul, 0, 1)) return undefined;
+    if (
+      !isRecord(answer) ||
+      answer.type !== "noul" ||
+      !isRangeNumber(answer.noul, 0, 1)
+    )
+      return undefined;
     risks.push({ id, probability: answer.noul });
   }
   return { model: response.model, severity: severityAnswer.score, risks };
@@ -191,10 +236,12 @@ function guardQuestionIds(): GuardQuestionId[] {
 }
 
 function toTypeSafeState(state: GuardState): EntryType {
-  const recentConversation: JsonSafe[] = state.recentConversation.map((message) => ({
-    role: message.role,
-    text: message.text,
-  }));
+  const recentConversation: JsonSafe[] = state.recentConversation.map(
+    (message) => ({
+      role: message.role,
+      text: message.text,
+    }),
+  );
   return {
     cwd: state.cwd,
     userObjective: state.userObjective,
@@ -207,8 +254,17 @@ function toTypeSafeState(state: GuardState): EntryType {
   };
 }
 
-function isRangeNumber(value: unknown, minimum: number, maximum: number): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum;
+function isRangeNumber(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= minimum &&
+    value <= maximum
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

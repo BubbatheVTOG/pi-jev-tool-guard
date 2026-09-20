@@ -54,14 +54,22 @@ test("builds bounded context from the active branch and excludes tool results by
   });
 
   assert.equal(state.userObjective, "current objective");
-  assert.equal(state.recentConversation.some((message) => message.text.includes("SECRET_RESULT")), false);
+  assert.equal(
+    state.recentConversation.some((message) =>
+      message.text.includes("SECRET_RESULT"),
+    ),
+    false,
+  );
   assert.equal(state.pendingTool.name, "bash");
   assert.match(state.pendingTool.input, /printf ok/);
 });
 
 test("includes tool results only when configured", () => {
   const state = buildGuardState({
-    ctx: contextWith([toolResultEntry("one", "useful output"), userEntry("two", "continue")]),
+    ctx: contextWith([
+      toolResultEntry("one", "useful output"),
+      userEntry("two", "continue"),
+    ]),
     toolName: "edit",
     input: { path: "a.ts" },
     config: { ...DEFAULT_CONFIG.context, includeToolResults: true },
@@ -74,12 +82,19 @@ test("includes tool results only when configured", () => {
 test("redacts structured and embedded credentials before serialization", () => {
   const value = redactSecrets({
     apiKey: "top-secret",
-    command: "export TYPESAFE_API_KEY=visible-secret && curl -H 'Authorization: Bearer abc.def-123' https://example.test",
-    nested: { password: "hunter2", url: "https://user:password@example.test/path" },
+    command:
+      "export TYPESAFE_API_KEY=visible-secret && curl -H 'Authorization: Bearer abc.def-123' https://example.test",
+    nested: {
+      password: "hunter2",
+      url: "https://user:password@example.test/path",
+    },
   });
   const serialized = JSON.stringify(value);
 
-  assert.doesNotMatch(serialized, /top-secret|visible-secret|hunter2|abc\.def-123|user:password/);
+  assert.doesNotMatch(
+    serialized,
+    /top-secret|visible-secret|hunter2|abc\.def-123|user:password/,
+  );
   assert.match(serialized, /REDACTED/);
 });
 

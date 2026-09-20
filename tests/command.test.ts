@@ -15,7 +15,11 @@ import { resolveToolGuardConfig } from "../src/config.ts";
 
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { force: true, recursive: true })));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((path) => rm(path, { force: true, recursive: true })),
+  );
 });
 
 function commandContext(options: {
@@ -36,8 +40,12 @@ function commandContext(options: {
         await options.onConfirm?.();
         return options.confirmed ?? true;
       },
-      notify: (message, level) => { notifications.push({ message, level: level ?? "info" }); },
-      setStatus: (_id, status) => { if (status) statuses.push(status); },
+      notify: (message, level) => {
+        notifications.push({ message, level: level ?? "info" });
+      },
+      setStatus: (_id, status) => {
+        if (status) statuses.push(status);
+      },
     },
   };
   return { context, notifications, statuses };
@@ -54,9 +62,16 @@ async function temporaryLayout() {
 }
 
 test("registers /tool-guard with expected completions", () => {
-  let command: { name: string; options: { getArgumentCompletions?: (prefix: string) => unknown } } | undefined;
+  let command:
+    | {
+        name: string;
+        options: { getArgumentCompletions?: (prefix: string) => unknown };
+      }
+    | undefined;
   registerToolGuardCommand({
-    registerCommand: (name, options) => { command = { name, options }; },
+    registerCommand: (name, options) => {
+      command = { name, options };
+    },
   });
 
   assert.equal(command?.name, "tool-guard");
@@ -82,7 +97,10 @@ test("formats effective status with provenance but no credential value", () => {
   assert.match(status, /timeoutMs = 3000 \[global\]/);
   assert.match(status, /thresholds\.reviewProbability = 0\.35 \[default\]/);
   assert.match(status, /Jev credential: present/);
-  assert.doesNotMatch(status, /TYPESAFE_API_KEY|secret|npm_abcdefghijklmnopqrstuvwxyz/);
+  assert.doesNotMatch(
+    status,
+    /TYPESAFE_API_KEY|secret|npm_abcdefghijklmnopqrstuvwxyz/,
+  );
   assert.match(status, /REDACTED_NPM_TOKEN/);
 });
 
@@ -99,7 +117,10 @@ test("status reports through Pi UI", async () => {
 
 test("edits only the toolGuard global override and preserves unrelated settings", async () => {
   const { agentDir, cwd, settingsPath } = await temporaryLayout();
-  await writeFile(settingsPath, JSON.stringify({ theme: "dark", toolGuard: { timeoutMs: 2500 } }));
+  await writeFile(
+    settingsPath,
+    JSON.stringify({ theme: "dark", toolGuard: { timeoutMs: 2500 } }),
+  );
   const { context, notifications } = commandContext({
     cwd,
     edited: '{"timeoutMs": 3500, "notifications": {"showAllowed": true}}',
@@ -110,15 +131,25 @@ test("edits only the toolGuard global override and preserves unrelated settings"
 
   const saved = JSON.parse(await readFile(settingsPath, "utf8"));
   assert.equal(saved.theme, "dark");
-  assert.deepEqual(saved.toolGuard, { timeoutMs: 3500, notifications: { showAllowed: true } });
-  assert.match(notifications.at(-1)?.message ?? "", /Saved Tool Guard global override/);
+  assert.deepEqual(saved.toolGuard, {
+    timeoutMs: 3500,
+    notifications: { showAllowed: true },
+  });
+  assert.match(
+    notifications.at(-1)?.message ?? "",
+    /Saved Tool Guard global override/,
+  );
 });
 
 test("cancelling confirmation leaves settings unchanged", async () => {
   const { agentDir, cwd, settingsPath } = await temporaryLayout();
   const original = JSON.stringify({ toolGuard: { timeoutMs: 2500 } });
   await writeFile(settingsPath, original);
-  const { context } = commandContext({ cwd, edited: '{"timeoutMs": 3500}', confirmed: false });
+  const { context } = commandContext({
+    cwd,
+    edited: '{"timeoutMs": 3500}',
+    confirmed: false,
+  });
 
   await runToolGuardCommand("edit-global", context, { agentDir });
 
@@ -127,18 +158,29 @@ test("cancelling confirmation leaves settings unchanged", async () => {
 
 test("detects a concurrent settings change instead of overwriting it", async () => {
   const { agentDir, cwd, settingsPath } = await temporaryLayout();
-  await writeFile(settingsPath, JSON.stringify({ theme: "dark", toolGuard: { timeoutMs: 2500 } }));
-  const concurrent = JSON.stringify({ theme: "light", toolGuard: { timeoutMs: 2600 } });
+  await writeFile(
+    settingsPath,
+    JSON.stringify({ theme: "dark", toolGuard: { timeoutMs: 2500 } }),
+  );
+  const concurrent = JSON.stringify({
+    theme: "light",
+    toolGuard: { timeoutMs: 2600 },
+  });
   const { context, notifications } = commandContext({
     cwd,
     edited: '{"timeoutMs": 3500}',
-    onConfirm: async () => { await writeFile(settingsPath, concurrent); },
+    onConfirm: async () => {
+      await writeFile(settingsPath, concurrent);
+    },
   });
 
   await runToolGuardCommand("edit-global", context, { agentDir });
 
   assert.equal(await readFile(settingsPath, "utf8"), concurrent);
-  assert.match(notifications.at(-1)?.message ?? "", /changed while the editor was open/);
+  assert.match(
+    notifications.at(-1)?.message ?? "",
+    /changed while the editor was open/,
+  );
 });
 
 test("invalid edited settings do not modify the file or expose the content", async () => {
@@ -160,9 +202,16 @@ test("invalid edited settings do not modify the file or expose the content", asy
 
 test("refuses project edits when the project is untrusted", async () => {
   const { agentDir, cwd } = await temporaryLayout();
-  const { context, notifications } = commandContext({ cwd, trusted: false, edited: "{}" });
+  const { context, notifications } = commandContext({
+    cwd,
+    trusted: false,
+    edited: "{}",
+  });
 
   await runToolGuardCommand("edit-project", context, { agentDir });
 
-  assert.match(notifications.at(-1)?.message ?? "", /require a trusted project/);
+  assert.match(
+    notifications.at(-1)?.message ?? "",
+    /require a trusted project/,
+  );
 });
