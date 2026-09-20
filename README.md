@@ -9,6 +9,8 @@ recent conversation, and pending call to Jev. Low-risk calls continue; risky
 calls require confirmation. In headless modes, risky calls are blocked by
 default.
 
+![Tool Guard pausing a high-risk shell command and showing Jev's risk assessment before execution](docs/images/tool-guard-confirmation.png)
+
 ## Install
 
 From npm:
