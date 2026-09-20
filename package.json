@@ -1,0 +1,55 @@
+{
+  "name": "pi-jev-tool-guard",
+  "version": "0.1.0",
+  "description": "Context-aware tool-call safeguards for Pi, powered by TypeSafe Jev.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "tool-guard",
+    "typesafe",
+    "jev"
+  ],
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run build && npm test"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BubbatheVTOG/pi-jev-tool-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BubbatheVTOG/pi-jev-tool-guard/issues"
+  },
+  "homepage": "https://github.com/BubbatheVTOG/pi-jev-tool-guard#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
