@@ -59,7 +59,11 @@ export function createToolCallGuard(options: {
     updateGuardStatus(ctx, config, getApiKey());
     notifyProjectOverride(ctx, resolvedConfig, reportedProjectOverride);
     if (resolvedConfig.projectOverrideApplied) reportedProjectOverride = true;
-    if (config.disable || !config.enabled || !isProtectedTool(event.toolName, config))
+    if (
+      config.disable ||
+      !config.enabled ||
+      !isProtectedTool(event.toolName, config)
+    )
       return undefined;
 
     const ruleDecision = evaluateRules(event, ctx.cwd, config);
