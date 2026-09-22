@@ -134,6 +134,44 @@ Built-in defaults:
 }
 ```
 
+### Settings reference
+
+| Key | Default | Accepted values and behavior |
+| --- | --- | --- |
+| `disable` | `false` | Boolean master bypass. When `true`, protected calls skip rules and Jev entirely. |
+| `enabled` | `true` | Compatibility toggle; `false` also bypasses the guard. Prefer `disable` for new configuration. |
+| `protectedTools` | `["bash", "write", "edit"]` | Array containing only `bash`, `write`, and/or `edit`; duplicates are rejected. The array replaces rather than appends. |
+| `model` | `"jev-latest"` | Non-empty TypeSafe model name used for Jev evaluation. |
+| `timeoutMs` | `2000` | Integer from 100 through 60,000 milliseconds. Retries are disabled. |
+| `evaluatorFailure` | `"allow"` | `"allow"` fails open when the key/request/response is unavailable; `"block"` fails closed. |
+| `headlessRisk` | `"block"` | `"block"` denies calls that require confirmation when no UI exists; `"allow"` lets them proceed. |
+| `threshold` | `5` | Integer 1–10. Higher values lower the derived probability/severity bars and flag more calls. |
+| `toolThresholds` | `{}` | Object whose keys are protected tool names and values are integers 1–10. A value replaces—not adds to—the base threshold for that tool. Unspecified bash gets the built-in +3 boost; explicit values suppress the boost. Entries merge by tool across global/project layers. |
+| `context.recentMessages` | `6` | Integer 0–100; number of recent session messages considered. |
+| `context.maxCharacters` | `12000` | Integer 1,000–24,000. Old messages are dropped first, then tool input/objective/cwd are bounded while preserving useful ends. |
+| `context.redactSecrets` | `true` | Redact common credentials before Jev receives context and confirmation details. |
+| `context.includeToolResults` | `false` | Include recent tool-result text in Jev state. This can increase exposure and context use. |
+| `rules.protectedPaths` | `[]` | Paths (relative to cwd or absolute) that force confirmation for `write`/`edit`; descendants match. |
+| `rules.allowedPaths` | `[]` | Paths that bypass Jev for `write`/`edit`, unless a protected-path rule also matches. |
+| `rules.alwaysConfirmCommands` | `[]` | Literal substrings that force bash confirmation. |
+| `rules.allowedCommands` | `[]` | Literal substrings that bypass Jev and built-in bash-danger checks. |
+| `rules.denyCommands` | `[]` | Literal substrings that hard-block bash calls; strongest command-rule precedence. |
+| `notifications.showAllowed` | `false` | Notify when a rule or low-risk Jev result allows a call. |
+| `notifications.showEvaluatorFailures` | `true` | Notify once per evaluator failure class. Status still reports inactivity. |
+| `notifications.showProjectOverride` | `true` | Warn once when trusted-project policy is active. |
+| `projectOverrides` | `"full"` | `"full"` permits trusted `.pi/settings.json` overrides; `"none"` ignores project Tool Guard policy. |
+
+### Default rationale
+
+The base threshold of 5 is a balanced review policy; bash receives effective
+level 8 because arbitrary shell execution has broader impact. Protected tools
+start enabled, tool results stay out of Jev context, context is bounded to
+12,000 characters, and risky headless calls block. Evaluator outages fail open
+by default to keep Pi responsive while status and warnings make the inactive
+guard visible. Environments that require enforcement during an outage should
+set `evaluatorFailure` to `"block"` and prevent trusted-project weakening with
+`projectOverrides: "none"`.
+
 Settings merge in this order:
 
 1. plugin defaults;
@@ -162,6 +200,26 @@ working directory. Command rules use literal substring matching, so a rule can
 catch a command embedded in a pipeline or compound statement. Rules are not
 regular expressions or shell glob patterns.
 
+### Built-in bash review categories
+
+Unless an explicit `allowedCommands` entry matches first, Tool Guard forces a
+high-risk confirmation for these deterministic categories before calling Jev:
+
+- fork-bomb syntax;
+- recursive `rm` (`-r`, `-R`, or `--recursive`);
+- raw disk/filesystem commands (`dd ... of=/dev/...`, direct `/dev` redirects,
+  `mkfs`, `fdisk`, `parted`, `wipefs`, `sfdisk`, and `sgdisk`);
+- shutdown/reboot/power commands;
+- piping `curl`/`wget` output into a shell or interpreter;
+- `git push` with force, mirror, or remote-delete flags;
+- npm/pnpm/yarn/bun publish, unpublish, or deprecate commands;
+- world-writable `chmod 777` and recursive `chown`;
+- destructive Docker pruning/removal and `kubectl delete`;
+- SQL `DROP`/`TRUNCATE` statements.
+
+These checks force review rather than hard-block. Add an explicit
+`denyCommands` entry for commands that must never execute.
+
 ### Threshold table
 
 | Level | Review probability | High-risk probability | Severity review |
@@ -176,6 +234,10 @@ regular expressions or shell glob patterns.
 | 8 | 0.30 | 0.35 | 1 |
 | 9 | 0.20 | 0.25 | 1 |
 | 10 | 0.10 | 0.15 | 1 |
+
+Severity values follow Jev's four-level consequence score: 0 means no meaningful
+harm, 1 limited harm, 2 serious harm, and 3 critical harm. The table's
+`Severity review` value is the score at or above which confirmation is required.
 
 `/tool-guard status` shows the effective level and derived values for every
 protected tool, including whether a per-tool override or the built-in bash boost
