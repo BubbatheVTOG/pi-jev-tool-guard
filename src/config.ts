@@ -7,7 +7,13 @@ export type ProtectedTool = (typeof PROTECTED_TOOLS)[number];
 export type EvaluatorFailure = "allow" | "block";
 export type HeadlessRisk = "allow" | "block";
 export type ProjectOverrides = "full" | "none";
-export type ConfigSource = "default" | "global" | "project";
+export type ConfigSource = "default" | "global" | "project" | "derived";
+
+export interface ResolvedThresholds {
+  reviewProbability: number;
+  highRiskProbability: number;
+  severityReview: number;
+}
 
 export interface ToolGuardConfig {
   disable: boolean;
@@ -17,11 +23,16 @@ export interface ToolGuardConfig {
   timeoutMs: number;
   evaluatorFailure: EvaluatorFailure;
   headlessRisk: HeadlessRisk;
-  thresholds: {
-    reviewProbability: number;
-    highRiskProbability: number;
-    severityReview: number;
-  };
+  /** 1-10 review threshold; higher values flag more tool calls. */
+  threshold: number;
+  /**
+   * Per-tool threshold on the same 1-10 scale. An entry replaces the base
+   * `threshold` for that tool. Tools without an entry fall back to the base
+   * value plus the built-in per-tool boost (BUILTIN_TOOL_THRESHOLD_BOOST).
+   */
+  toolThresholds: Partial<Record<ProtectedTool, number>>;
+  /** Review thresholds derived from `threshold`; never set directly. */
+  thresholds: ResolvedThresholds;
   context: {
     recentMessages: number;
     maxCharacters: number;
@@ -33,6 +44,8 @@ export interface ToolGuardConfig {
     allowedPaths: string[];
     alwaysConfirmCommands: string[];
     allowedCommands: string[];
+    /** Bash commands matching these (substring) are blocked outright. */
+    denyCommands: string[];
   };
   notifications: {
     showAllowed: boolean;
@@ -50,7 +63,8 @@ export interface ToolGuardOverride {
   timeoutMs?: number;
   evaluatorFailure?: EvaluatorFailure;
   headlessRisk?: HeadlessRisk;
-  thresholds?: Partial<ToolGuardConfig["thresholds"]>;
+  threshold?: number;
+  toolThresholds?: Partial<Record<ProtectedTool, number>>;
   context?: Partial<ToolGuardConfig["context"]>;
   rules?: Partial<ToolGuardConfig["rules"]>;
   notifications?: Partial<ToolGuardConfig["notifications"]>;
@@ -63,6 +77,73 @@ export interface ResolvedToolGuardConfig {
   projectOverrideApplied: boolean;
 }
 
+export const MIN_THRESHOLD = 1;
+export const MAX_THRESHOLD = 10;
+export const DEFAULT_THRESHOLD = 5;
+
+/**
+ * Built-in per-tool escalation applied only when the user has not set an
+ * explicit per-tool threshold. Bash can execute arbitrary code, so it is
+ * reviewed more strictly by default; pin a tool explicitly to override.
+ */
+export const BUILTIN_TOOL_THRESHOLD_BOOST: Readonly<Record<ProtectedTool, number>> =
+  {
+    bash: 3,
+    write: 0,
+    edit: 0,
+  };
+
+/**
+ * Review thresholds derived from the 1-10 `threshold` scale
+ * (index = level - MIN_THRESHOLD). Higher levels flag more tool calls. Every
+ * row keeps reviewProbability < highRiskProbability; the Jev payload stays
+ * under the model's 32k context via context.maxCharacters.
+ */
+export const THRESHOLD_TABLE: readonly ResolvedThresholds[] = [
+  { reviewProbability: 0.9, highRiskProbability: 0.95, severityReview: 3 },
+  { reviewProbability: 0.85, highRiskProbability: 0.9, severityReview: 3 },
+  { reviewProbability: 0.8, highRiskProbability: 0.85, severityReview: 3 },
+  { reviewProbability: 0.7, highRiskProbability: 0.75, severityReview: 2 },
+  { reviewProbability: 0.6, highRiskProbability: 0.65, severityReview: 2 },
+  { reviewProbability: 0.5, highRiskProbability: 0.55, severityReview: 2 },
+  { reviewProbability: 0.4, highRiskProbability: 0.45, severityReview: 2 },
+  { reviewProbability: 0.3, highRiskProbability: 0.35, severityReview: 1 },
+  { reviewProbability: 0.2, highRiskProbability: 0.25, severityReview: 1 },
+  { reviewProbability: 0.1, highRiskProbability: 0.15, severityReview: 1 },
+];
+
+/** Derive the review thresholds for a base threshold level (clamped). */
+export function deriveThresholds(threshold: number): ResolvedThresholds {
+  const level = Math.max(MIN_THRESHOLD, Math.min(MAX_THRESHOLD, threshold));
+  const row = THRESHOLD_TABLE[level - MIN_THRESHOLD];
+  if (!row) throw new Error(`tool-guard: unknown threshold level ${level}`);
+  return { ...row };
+}
+
+/**
+ * Effective 1-10 level for a tool: the explicit per-tool value when present,
+ * otherwise the base threshold plus the built-in per-tool boost (clamped).
+ */
+export function effectiveToolThreshold(
+  config: Pick<ToolGuardConfig, "threshold" | "toolThresholds">,
+  tool: ProtectedTool,
+): number {
+  const explicit = config.toolThresholds[tool];
+  if (explicit !== undefined) return explicit;
+  return Math.min(
+    MAX_THRESHOLD,
+    config.threshold + BUILTIN_TOOL_THRESHOLD_BOOST[tool],
+  );
+}
+
+/** Derive the review thresholds in force for a specific tool. */
+export function effectiveThresholds(
+  config: Pick<ToolGuardConfig, "threshold" | "toolThresholds">,
+  tool: ProtectedTool,
+): ResolvedThresholds {
+  return deriveThresholds(effectiveToolThreshold(config, tool));
+}
+
 const DEFAULT_CONFIG_VALUE: ToolGuardConfig = {
   disable: false,
   enabled: true,
@@ -71,11 +152,9 @@ const DEFAULT_CONFIG_VALUE: ToolGuardConfig = {
   timeoutMs: 2000,
   evaluatorFailure: "allow",
   headlessRisk: "block",
-  thresholds: {
-    reviewProbability: 0.35,
-    highRiskProbability: 0.7,
-    severityReview: 1,
-  },
+  threshold: DEFAULT_THRESHOLD,
+  toolThresholds: {},
+  thresholds: deriveThresholds(DEFAULT_THRESHOLD),
   context: {
     recentMessages: 6,
     maxCharacters: 12_000,
@@ -87,6 +166,7 @@ const DEFAULT_CONFIG_VALUE: ToolGuardConfig = {
     allowedPaths: [],
     alwaysConfirmCommands: [],
     allowedCommands: [],
+    denyCommands: [],
   },
   notifications: {
     showAllowed: false,
@@ -107,16 +187,12 @@ const TOP_LEVEL_KEYS = new Set([
   "timeoutMs",
   "evaluatorFailure",
   "headlessRisk",
-  "thresholds",
+  "threshold",
+  "toolThresholds",
   "context",
   "rules",
   "notifications",
   "projectOverrides",
-]);
-const THRESHOLD_KEYS = new Set([
-  "reviewProbability",
-  "highRiskProbability",
-  "severityReview",
 ]);
 const CONTEXT_KEYS = new Set([
   "recentMessages",
@@ -129,6 +205,7 @@ const RULE_KEYS = new Set([
   "allowedPaths",
   "alwaysConfirmCommands",
   "allowedCommands",
+  "denyCommands",
 ]);
 const NOTIFICATION_KEYS = new Set([
   "showAllowed",
@@ -189,8 +266,17 @@ export function parseToolGuardOverride(
       `${source}.toolGuard.headlessRisk`,
     );
   }
-  if ("thresholds" in value)
-    parsed.thresholds = parseThresholds(value.thresholds, source);
+  if ("threshold" in value) {
+    parsed.threshold = requireInteger(
+      value.threshold,
+      MIN_THRESHOLD,
+      MAX_THRESHOLD,
+      `${source}.toolGuard.threshold`,
+    );
+  }
+  if ("toolThresholds" in value) {
+    parsed.toolThresholds = parseToolThresholds(value.toolThresholds, source);
+  }
   if ("context" in value) parsed.context = parseContext(value.context, source);
   if ("rules" in value) parsed.rules = parseRules(value.rules, source);
   if ("notifications" in value)
@@ -228,6 +314,7 @@ export function resolveToolGuardConfig(
       "project",
     );
     applyOverride(config, provenance, projectOverride, "project");
+    deriveEffectiveThresholds(config, provenance);
     validateCrossFields(config, "effective toolGuard settings");
     return {
       config,
@@ -236,8 +323,23 @@ export function resolveToolGuardConfig(
     };
   }
 
+  deriveEffectiveThresholds(config, provenance);
   validateCrossFields(config, "effective toolGuard settings");
   return { config, provenance, projectOverrideApplied: false };
+}
+
+/**
+ * Re-derive the concrete review thresholds from the effective threshold
+ * scale and tag their provenance as derived (they are never set directly).
+ */
+function deriveEffectiveThresholds(
+  config: ToolGuardConfig,
+  provenance: Record<string, ConfigSource>,
+): void {
+  config.thresholds = deriveThresholds(config.threshold);
+  for (const key of Object.keys(config.thresholds)) {
+    provenance[`thresholds.${key}`] = "derived";
+  }
 }
 
 export async function loadToolGuardConfig(options: {
@@ -281,35 +383,23 @@ async function readSettingsFile(
   }
 }
 
-function parseThresholds(
+function parseToolThresholds(
   value: unknown,
   source: ConfigSource,
-): Partial<ToolGuardConfig["thresholds"]> {
-  const record = requireRecord(value, `${source}.toolGuard.thresholds`);
-  rejectUnknownKeys(record, THRESHOLD_KEYS, `${source}.toolGuard.thresholds`);
-  const parsed: Partial<ToolGuardConfig["thresholds"]> = {};
-  if ("reviewProbability" in record) {
-    parsed.reviewProbability = requireNumber(
-      record.reviewProbability,
-      0,
-      1,
-      `${source}.toolGuard.thresholds.reviewProbability`,
-    );
-  }
-  if ("highRiskProbability" in record) {
-    parsed.highRiskProbability = requireNumber(
-      record.highRiskProbability,
-      0,
-      1,
-      `${source}.toolGuard.thresholds.highRiskProbability`,
-    );
-  }
-  if ("severityReview" in record) {
-    parsed.severityReview = requireNumber(
-      record.severityReview,
-      0,
-      3,
-      `${source}.toolGuard.thresholds.severityReview`,
+): Partial<Record<ProtectedTool, number>> {
+  const record = requireRecord(value, `${source}.toolGuard.toolThresholds`);
+  const parsed: Partial<Record<ProtectedTool, number>> = {};
+  for (const [tool, level] of Object.entries(record)) {
+    if (!(PROTECTED_TOOLS as readonly string[]).includes(tool)) {
+      throw new Error(
+        `tool-guard: toolThresholds contains unsupported tool ${tool}`,
+      );
+    }
+    parsed[tool as ProtectedTool] = requireInteger(
+      level,
+      MIN_THRESHOLD,
+      MAX_THRESHOLD,
+      `${source}.toolGuard.toolThresholds.${tool}`,
     );
   }
   return parsed;
@@ -334,7 +424,7 @@ function parseContext(
     parsed.maxCharacters = requireInteger(
       record.maxCharacters,
       1_000,
-      100_000,
+      24_000,
       `${source}.toolGuard.context.maxCharacters`,
     );
   }
@@ -382,6 +472,12 @@ function parseRules(
     parsed.allowedCommands = requireStringArray(
       record.allowedCommands,
       `${source}.toolGuard.rules.allowedCommands`,
+    );
+  }
+  if ("denyCommands" in record) {
+    parsed.denyCommands = requireStringArray(
+      record.denyCommands,
+      `${source}.toolGuard.rules.denyCommands`,
     );
   }
   return parsed;
@@ -488,13 +584,21 @@ function applyOverride(
     provenance,
     source,
   );
-  applyNested(
-    config.thresholds,
-    override.thresholds,
-    "thresholds",
+  applyScalar(
+    override.threshold,
+    (value) => {
+      config.threshold = value;
+    },
+    "threshold",
     provenance,
     source,
   );
+  if (override.toolThresholds !== undefined) {
+    for (const [tool, level] of Object.entries(override.toolThresholds)) {
+      config.toolThresholds[tool as ProtectedTool] = level;
+      provenance[`toolThresholds.${tool}`] = source;
+    }
+  }
   applyNested(config.context, override.context, "context", provenance, source);
   applyNested(config.rules, override.rules, "rules", provenance, source);
   applyNested(
@@ -542,18 +646,24 @@ function applyNested<T extends object>(
 }
 
 function validateCrossFields(config: ToolGuardConfig, label: string): void {
-  if (
-    config.thresholds.reviewProbability > config.thresholds.highRiskProbability
-  ) {
-    throw new Error(
-      `tool-guard: ${label} reviewProbability must not exceed highRiskProbability`,
-    );
+  for (const tool of PROTECTED_TOOLS) {
+    const thresholds = effectiveThresholds(config, tool);
+    if (thresholds.reviewProbability > thresholds.highRiskProbability) {
+      throw new Error(
+        `tool-guard: ${label} derived thresholds for ${tool} are inconsistent`,
+      );
+    }
   }
 }
 
 function defaultProvenance(): Record<string, ConfigSource> {
   const provenance: Record<string, ConfigSource> = {};
   for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
+    if (key === "thresholds") {
+      for (const child of Object.keys(value as Record<string, unknown>))
+        provenance[`${key}.${child}`] = "derived";
+      continue;
+    }
     if (isRecord(value)) {
       for (const child of Object.keys(value))
         provenance[`${key}.${child}`] = "default";
@@ -568,6 +678,7 @@ function cloneConfig(config: Readonly<ToolGuardConfig>): ToolGuardConfig {
   return {
     ...config,
     protectedTools: [...config.protectedTools],
+    toolThresholds: { ...config.toolThresholds },
     thresholds: { ...config.thresholds },
     context: { ...config.context },
     rules: {
@@ -575,6 +686,7 @@ function cloneConfig(config: Readonly<ToolGuardConfig>): ToolGuardConfig {
       allowedPaths: [...config.rules.allowedPaths],
       alwaysConfirmCommands: [...config.rules.alwaysConfirmCommands],
       allowedCommands: [...config.rules.allowedCommands],
+      denyCommands: [...config.rules.denyCommands],
     },
     notifications: { ...config.notifications },
   };
@@ -659,25 +771,6 @@ function requireInteger(
     );
   }
   return value as number;
-}
-
-function requireNumber(
-  value: unknown,
-  min: number,
-  max: number,
-  label: string,
-): number {
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value < min ||
-    value > max
-  ) {
-    throw new Error(
-      `tool-guard: ${label} must be a number from ${min} to ${max}`,
-    );
-  }
-  return value;
 }
 
 function requireEnum<const T extends readonly string[]>(

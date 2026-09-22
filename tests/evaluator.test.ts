@@ -72,7 +72,7 @@ test("requires confirmation when any hazard or severity crosses review policy", 
     config: config(),
     apiKey: "test-key",
     systemOne: async () =>
-      response({ destructiveChange: 0.82, externalImpact: 0.5, severity: 2.2 }),
+      response({ destructiveChange: 0.82, externalImpact: 0.71, severity: 2.2 }),
   });
 
   assert.equal(result.decision, "confirm");

@@ -16,13 +16,13 @@ default.
 From npm:
 
 ```bash
-pi install npm:pi-jev-tool-guard@0.1.0
+pi install npm:pi-jev-tool-guard
 ```
 
 Or from the Git repository:
 
 ```bash
-pi install git:github.com/BubbatheVTOG/pi-jev-tool-guard@v0.1.0
+pi install git:github.com/BubbatheVTOG/pi-jev-tool-guard
 ```
 
 Set the TypeSafe credential in the environment that starts Pi:
@@ -48,8 +48,13 @@ Jev evaluates independent risks in one request:
 - difficult recovery;
 - overall consequence severity.
 
-The extension owns the control flow and thresholds. Jev returns typed
-probabilities; it does not execute tools or generate permission decisions.
+The extension owns control flow and derives Jev probability thresholds from a
+single 1–10 `threshold` scale. Higher values flag more calls. A per-tool value
+in `toolThresholds` replaces the base value for that tool. Bash is treated more
+strictly by default: when it has no explicit value, it receives a built-in +3
+boost (clamped to 10), and deterministic dangerous-command patterns force a
+review before Jev is called. Jev returns typed probabilities; it does not
+execute tools or generate permission decisions.
 
 A successful risky assessment:
 
@@ -83,8 +88,10 @@ override:
 {
   "toolGuard": {
     "timeoutMs": 3000,
-    "thresholds": {
-      "reviewProbability": 0.4
+    "threshold": 7,
+    "toolThresholds": {
+      "bash": 9,
+      "write": 5
     }
   }
 }
@@ -102,11 +109,8 @@ Built-in defaults:
     "timeoutMs": 2000,
     "evaluatorFailure": "allow",
     "headlessRisk": "block",
-    "thresholds": {
-      "reviewProbability": 0.35,
-      "highRiskProbability": 0.7,
-      "severityReview": 1
-    },
+    "threshold": 5,
+    "toolThresholds": {},
     "context": {
       "recentMessages": 6,
       "maxCharacters": 12000,
@@ -117,7 +121,8 @@ Built-in defaults:
       "protectedPaths": [],
       "allowedPaths": [],
       "alwaysConfirmCommands": [],
-      "allowedCommands": []
+      "allowedCommands": [],
+      "denyCommands": []
     },
     "notifications": {
       "showAllowed": false,
@@ -140,20 +145,41 @@ key no longer disables the plugin; evaluation follows `evaluatorFailure` until a
 credential is available. `enabled` remains supported for compatibility.
 
 Nested objects merge by field. Arrays replace instead of append. Unknown keys,
-invalid types, duplicate list entries, and invalid threshold relationships are
-rejected. With `projectOverrides: "full"`, a trusted project can weaken or
+invalid types, duplicate list entries, and threshold values outside the integer
+range 1–10 are rejected. With `projectOverrides: "full"`, a trusted project can weaken or
 disable global policy; Pi warns when a project override is active. Set it to
 `"none"` globally to ignore project policy.
 
 Rule lists have deterministic precedence over Jev:
 
-- `protectedPaths` and `alwaysConfirmCommands` force confirmation;
-- `allowedPaths` and `allowedCommands` bypass evaluation;
-- confirmation rules win when both match.
+- `denyCommands` hard-block matching bash commands;
+- `allowedCommands` bypasses even built-in dangerous-command checks;
+- built-in bash danger patterns and `alwaysConfirmCommands` force confirmation;
+- `protectedPaths` forces confirmation before `allowedPaths` can bypass it.
 
 Paths match the configured path or its descendants after resolution against the
-working directory. Commands match the exact command or the same command followed
-by arguments. Rules are not regular expressions or shell glob patterns.
+working directory. Command rules use literal substring matching, so a rule can
+catch a command embedded in a pipeline or compound statement. Rules are not
+regular expressions or shell glob patterns.
+
+### Threshold table
+
+| Level | Review probability | High-risk probability | Severity review |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.90 | 0.95 | 3 |
+| 2 | 0.85 | 0.90 | 3 |
+| 3 | 0.80 | 0.85 | 3 |
+| 4 | 0.70 | 0.75 | 2 |
+| 5 | 0.60 | 0.65 | 2 |
+| 6 | 0.50 | 0.55 | 2 |
+| 7 | 0.40 | 0.45 | 2 |
+| 8 | 0.30 | 0.35 | 1 |
+| 9 | 0.20 | 0.25 | 1 |
+| 10 | 0.10 | 0.15 | 1 |
+
+`/tool-guard status` shows the effective level and derived values for every
+protected tool, including whether a per-tool override or the built-in bash boost
+produced it.
 
 ## Privacy and limitations
 
@@ -161,8 +187,9 @@ by arguments. Rules are not regular expressions or shell glob patterns.
   tokens, GitHub/npm tokens, JWTs, URL credentials, and private keys.
 - Redaction reduces exposure but cannot guarantee detection of every secret
   format. Keep `includeToolResults` disabled unless needed.
-- Context is character-bounded; oversized tool input retains its beginning and
-  end with an explicit truncation marker.
+- Context defaults to 12,000 characters and is capped at 24,000; oversized tool
+  input retains its beginning and end with an explicit truncation marker. This
+  leaves room inside Jev's 32k context window for questions and protocol data.
 - This extension is a confirmation guard, not an operating-system sandbox.
 - The first release protects only Pi's `bash`, `write`, and `edit` tools.
 - Explicit allow rules and fail-open policy intentionally reduce protection.
@@ -178,6 +205,11 @@ npm run check
 
 Tests are deterministic and mock Jev unless a separate synthetic live smoke test
 is run deliberately. No test reads live Pi settings.
+
+## Related packages
+
+- [`pi-jev-anti-slop`](https://pi.dev/packages/pi-jev-anti-slop) — structured Jev code and prose review ([npm](https://www.npmjs.com/package/pi-jev-anti-slop), [GitHub](https://github.com/BubbatheVTOG/pi-jev-anti-slop)).
+- [`pi-jev-redact`](https://pi.dev/packages/pi-jev-redact) — last-mile provider-payload secret and PII redaction ([npm](https://www.npmjs.com/package/pi-jev-redact), [GitHub](https://github.com/BubbatheVTOG/pi-jev-redact)).
 
 ## License
 

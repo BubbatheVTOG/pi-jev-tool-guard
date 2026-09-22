@@ -16,8 +16,13 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  BUILTIN_TOOL_THRESHOLD_BOOST,
+  deriveThresholds,
+  effectiveToolThreshold,
   loadToolGuardConfig,
+  MAX_THRESHOLD,
   parseToolGuardOverride,
+  PROTECTED_TOOLS,
   type ConfigSource,
   type ResolvedToolGuardConfig,
 } from "./config.ts";
@@ -168,13 +173,46 @@ export function formatToolGuardStatus(
     `Jev credential: ${apiKeyPresent ? "present" : "missing (evaluatorFailure applies)"}`,
     `Trusted project override: ${resolved.projectOverrideApplied ? "applied" : "not applied"}`,
     "",
+    `Threshold scale (1-10; higher flags more. Derived values shown):`,
   ];
+  for (const tool of PROTECTED_TOOLS) {
+    lines.push(formatToolThresholdLine(resolved, tool));
+  }
+  lines.push("");
   for (const [path, value] of flattenConfig(resolved.config)) {
+    if (path === "thresholds" || path.startsWith("thresholds.")) continue;
     lines.push(
       `${path} = ${JSON.stringify(redactSecrets(value))} [${resolved.provenance[path] ?? "default"}]`,
     );
   }
   return lines.join("\n");
+}
+
+function formatToolThresholdLine(
+  resolved: ResolvedToolGuardConfig,
+  tool: (typeof PROTECTED_TOOLS)[number],
+): string {
+  const { config, provenance } = resolved;
+  const explicit = config.toolThresholds[tool];
+  const boost = BUILTIN_TOOL_THRESHOLD_BOOST[tool];
+  let source: string;
+  if (explicit !== undefined) {
+    source = `explicit ${provenance[`toolThresholds.${tool}`] ?? "default"}`;
+  } else if (config.threshold + boost > MAX_THRESHOLD) {
+    source = `base ${config.threshold} + boost ${boost}, clamped to ${MAX_THRESHOLD}`;
+  } else if (boost > 0) {
+    source = `base ${config.threshold} + built-in boost ${boost}`;
+  } else {
+    source = `base ${config.threshold}`;
+  }
+  const effective = effectiveToolThreshold(config, tool);
+  const derived = deriveThresholds(effective);
+  return (
+    `  ${tool.padEnd(6)} = ${effective} [${source}] ` +
+    `review >= ${derived.reviewProbability}, ` +
+    `high-risk >= ${derived.highRiskProbability}, ` +
+    `severity >= ${derived.severityReview}`
+  );
 }
 
 async function showStatus(

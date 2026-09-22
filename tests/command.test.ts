@@ -95,7 +95,11 @@ test("formats effective status with provenance but no credential value", () => {
   );
 
   assert.match(status, /timeoutMs = 3000 \[global\]/);
-  assert.match(status, /thresholds\.reviewProbability = 0\.35 \[default\]/);
+  assert.match(
+    status,
+    /bash\s+= 8 \[base 5 \+ built-in boost 3\] review >= 0\.3/,
+  );
+  assert.match(status, /write\s+= 5 \[base 5\] review >= 0\.6/);
   assert.match(status, /Jev credential: present/);
   assert.doesNotMatch(
     status,

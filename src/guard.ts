@@ -1,6 +1,11 @@
 import { resolve } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedToolGuardConfig, ToolGuardConfig } from "./config.ts";
+import {
+  effectiveThresholds,
+  type ProtectedTool,
+  type ResolvedToolGuardConfig,
+  type ToolGuardConfig,
+} from "./config.ts";
 import {
   buildGuardState,
   redactSecrets,
@@ -67,19 +72,33 @@ export function createToolCallGuard(options: {
       return undefined;
 
     const ruleDecision = evaluateRules(event, ctx.cwd, config);
-    if (ruleDecision === "allow") {
+    if (ruleDecision?.action === "allow") {
       notifyAllowed(ctx, config, event.toolName, "allowed by explicit rule");
       return undefined;
     }
-    if (ruleDecision === "confirm") {
+    if (ruleDecision?.action === "deny") {
+      return {
+        block: true,
+        reason: `Tool call blocked: ${ruleDecision.reason}`,
+      };
+    }
+    if (ruleDecision?.action === "confirm") {
       return confirmOrBlock(
         ctx,
         config,
         event,
-        "Matched an explicit always-confirm rule.",
-        true,
+        ruleDecision.reason,
+        ruleDecision.highRisk,
       );
     }
+
+    // The per-tool threshold scale derives stricter review thresholds for
+    // higher-risk tools (e.g. bash); the evaluator only sees those values.
+    const tool = event.toolName as ProtectedTool;
+    const evalConfig: ToolGuardConfig = {
+      ...config,
+      thresholds: effectiveThresholds(config, tool),
+    };
 
     let evaluation: RiskEvaluation;
     try {
@@ -91,7 +110,7 @@ export function createToolCallGuard(options: {
       });
       const evaluationOptions: Parameters<EvaluateGuardRisk>[0] = {
         state,
-        config,
+        config: evalConfig,
       };
       const apiKey = getApiKey();
       if (apiKey !== undefined) evaluationOptions.apiKey = apiKey;
@@ -138,43 +157,169 @@ function isProtectedTool(toolName: string, config: ToolGuardConfig): boolean {
   );
 }
 
+interface RuleDecision {
+  action: "allow" | "confirm" | "deny";
+  reason: string;
+  highRisk: boolean;
+}
+
+export interface BashDangerRule {
+  id: string;
+  label: string;
+  pattern: RegExp;
+}
+
+/**
+ * Deterministic gate for bash: high-impact command patterns that force a
+ * review dialog regardless of the threshold scale or Jev availability. Bash
+ * can execute arbitrary code, so the most destructive classes are screened
+ * before the probabilistic evaluation. A match forces confirmation; it never
+ * blocks outright (an explicit deny rule can still hard-block).
+ */
+export const BASH_DANGER_RULES: readonly BashDangerRule[] = [
+  {
+    id: "fork-bomb",
+    label: "fork bomb",
+    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+  },
+  {
+    id: "recursive-delete",
+    label: "recursive delete",
+    pattern: /\brm\b[^\n;&|]*?(\s-[a-zA-Z]*[rR][a-zA-Z]*\b|\s--recursive\b)/,
+  },
+  {
+    id: "disk-write",
+    label: "raw disk or filesystem modification",
+    pattern:
+      /\bdd\b[^\n;&|]*\bof=\/dev\/|>\s*\/dev\/(?:sd[a-z0-9]+|nvme\d+n\d+|mmcblk\d+)|\bmkfs(?:\.[a-z0-9]+)?\b|\b(?:fdisk|parted|wipefs|sfdisk|sgdisk)\b/,
+  },
+  {
+    id: "power",
+    label: "system power or shutdown",
+    pattern: /\b(?:shutdown|reboot|poweroff|halt|init\s+[06])\b/,
+  },
+  {
+    id: "pipe-to-shell",
+    label: "piping remote content into a shell",
+    pattern:
+      /\b(?:curl|wget)\b[^\n|]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh|dash|ksh|python[0-9.]*|node)\b/,
+  },
+  {
+    id: "force-push",
+    label: "force push or remote ref deletion",
+    pattern:
+      /\bgit\s+push\b[^\n;&|]*?(?:--force\b|--mirror\b|--delete\b|\s-f\b)/,
+  },
+  {
+    id: "registry-publish",
+    label: "publishing to a package registry",
+    pattern: /\b(?:npm|pnpm|yarn|bun)\s+(?:publish|unpublish|deprecate)\b/,
+  },
+  {
+    id: "world-writable",
+    label: "world-writable permissions",
+    pattern: /\bchmod\s+(?:-[a-zA-Z]+\s+)*0?777\b/,
+  },
+  {
+    id: "recursive-ownership",
+    label: "recursive ownership change",
+    pattern: /\bchown\s+(?:-[a-zA-Z]+\s+)*(?:-R\b|--recursive\b)/,
+  },
+  {
+    id: "container-destruct",
+    label: "container or workload destruction",
+    pattern:
+      /\bdocker\s+(?:rm\s+(?:-[a-zA-Z]+\s+)*-f\b|system\s+prune|volume\s+rm|network\s+prune)|\bkubectl\s+delete\b/,
+  },
+  {
+    id: "sql-destruct",
+    label: "destructive SQL statement",
+    pattern: /\b(?:drop|truncate)\s+(?:table|database|schema)\b/i,
+  },
+];
+
+/**
+ * Rule precedence for bash commands: explicit deny (hard block) > explicit
+ * allow (suppresses even built-in danger patterns; an informed user choice)
+ * > built-in danger (confirm) > explicit always-confirm (confirm).
+ * Path rules keep their prior order: protected path > allowed path.
+ */
 function evaluateRules(
   event: GuardToolCallEvent,
   cwd: string,
   config: ToolGuardConfig,
-): "allow" | "confirm" | undefined {
+): RuleDecision | undefined {
   if (event.toolName === "bash") {
     const command = stringField(event.input, "command");
     if (!command) return undefined;
-    if (
-      config.rules.alwaysConfirmCommands.some((rule) =>
-        commandMatches(command, rule),
-      )
-    )
-      return "confirm";
-    if (
-      config.rules.allowedCommands.some((rule) => commandMatches(command, rule))
-    )
-      return "allow";
+    const denied = config.rules.denyCommands.find((rule) =>
+      commandContains(command, rule),
+    );
+    if (denied) {
+      return {
+        action: "deny",
+        reason: `Matched an explicit deny rule ("${denied}").`,
+        highRisk: false,
+      };
+    }
+    const allowed = config.rules.allowedCommands.find((rule) =>
+      commandContains(command, rule),
+    );
+    if (allowed) {
+      return {
+        action: "allow",
+        reason: "Matched an explicit allow rule.",
+        highRisk: false,
+      };
+    }
+    const danger = BASH_DANGER_RULES.find((rule) => rule.pattern.test(command));
+    if (danger) {
+      return {
+        action: "confirm",
+        reason: `Matched a built-in dangerous bash pattern (${danger.label}).`,
+        highRisk: true,
+      };
+    }
+    const alwaysConfirm = config.rules.alwaysConfirmCommands.find((rule) =>
+      commandContains(command, rule),
+    );
+    if (alwaysConfirm) {
+      return {
+        action: "confirm",
+        reason: `Matched an explicit always-confirm rule ("${alwaysConfirm}").`,
+        highRisk: false,
+      };
+    }
     return undefined;
   }
   if (event.toolName !== "write" && event.toolName !== "edit") return undefined;
   const path = stringField(event.input, "path");
   if (!path) return undefined;
-  if (config.rules.protectedPaths.some((rule) => pathMatches(path, rule, cwd)))
-    return "confirm";
-  if (config.rules.allowedPaths.some((rule) => pathMatches(path, rule, cwd)))
-    return "allow";
+  if (config.rules.protectedPaths.some((rule) => pathMatches(path, rule, cwd))) {
+    return {
+      action: "confirm",
+      reason: "Matched an explicit protected path rule.",
+      highRisk: false,
+    };
+  }
+  if (config.rules.allowedPaths.some((rule) => pathMatches(path, rule, cwd))) {
+    return {
+      action: "allow",
+      reason: "Matched an explicit allowed path rule.",
+      highRisk: false,
+    };
+  }
   return undefined;
 }
 
-function commandMatches(command: string, rule: string): boolean {
-  const normalizedCommand = command.trim();
-  const normalizedRule = rule.trim();
-  return (
-    normalizedCommand === normalizedRule ||
-    normalizedCommand.startsWith(`${normalizedRule} `)
-  );
+/**
+ * Substring matching so a rule can catch a command embedded in a pipeline or
+ * compound statement. Exact and prefix matches (the previous behavior) remain
+ * a subset of this.
+ */
+function commandContains(command: string, rule: string): boolean {
+  const needle = rule.trim();
+  return needle.length > 0 && command.includes(needle);
 }
 
 function pathMatches(path: string, rule: string, cwd: string): boolean {

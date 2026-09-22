@@ -273,3 +273,143 @@ test("explicit protected path takes precedence over an allowed path", async () =
   assert.equal(confirmations.length, 1);
   assert.equal(evaluations, 0);
 });
+
+test("built-in dangerous bash patterns force review before Jev evaluation", async () => {
+  let evaluations = 0;
+  const guard = createToolCallGuard({
+    loadConfig: async () => resolved(),
+    evaluateRisk: async () => {
+      evaluations += 1;
+      return safe;
+    },
+    getApiKey: () => "test-key",
+  });
+  const { ctx, confirmations } = context();
+
+  const result = await guard(
+    { toolName: "bash", input: { command: "git push --force origin main" } },
+    ctx,
+  );
+
+  assert.equal(result, undefined);
+  assert.equal(evaluations, 0);
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0]?.title ?? "", /high-risk bash/);
+  assert.match(
+    confirmations[0]?.message ?? "",
+    /force push or remote ref deletion/,
+  );
+});
+
+test("an explicit deny rule hard-blocks before any evaluation", async () => {
+  let evaluations = 0;
+  const guard = createToolCallGuard({
+    loadConfig: async () => resolved({ rules: { denyCommands: ["rm -rf"] } }),
+    evaluateRisk: async () => {
+      evaluations += 1;
+      return safe;
+    },
+    getApiKey: () => "test-key",
+  });
+  const { ctx, confirmations } = context({ confirm: true });
+
+  assert.deepEqual(
+    await guard(
+      { toolName: "bash", input: { command: "cd /tmp && rm -rf build" } },
+      ctx,
+    ),
+    {
+      block: true,
+      reason: 'Tool call blocked: Matched an explicit deny rule ("rm -rf").',
+    },
+  );
+  assert.equal(evaluations, 0);
+  assert.equal(confirmations.length, 0);
+});
+
+test("an explicit allow rule suppresses built-in danger patterns", async () => {
+  let evaluations = 0;
+  const guard = createToolCallGuard({
+    loadConfig: async () =>
+      resolved({ rules: { allowedCommands: ["npm publish"] } }),
+    evaluateRisk: async () => {
+      evaluations += 1;
+      return safe;
+    },
+    getApiKey: () => "test-key",
+  });
+  const { ctx, confirmations } = context({ confirm: true });
+
+  assert.equal(
+    await guard({ toolName: "bash", input: { command: "npm publish" } }, ctx),
+    undefined,
+  );
+  assert.equal(confirmations.length, 0);
+  assert.equal(evaluations, 0);
+});
+
+test("command rules use substring matching for compound commands", async () => {
+  const guard = createToolCallGuard({
+    loadConfig: async () =>
+      resolved({ rules: { alwaysConfirmCommands: ["deploy-staging"] } }),
+    evaluateRisk: async () => safe,
+    getApiKey: () => "test-key",
+  });
+  const { ctx, confirmations } = context({ confirm: true });
+
+  await guard(
+    { toolName: "bash", input: { command: "cd /opt && deploy-staging --now" } },
+    ctx,
+  );
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0]?.message ?? "", /always-confirm rule/);
+});
+
+test("an explicit per-tool level replaces the base level for the evaluator", async () => {
+  const seen: unknown[] = [];
+  const guard = createToolCallGuard({
+    loadConfig: async () =>
+      resolved({ threshold: 8, toolThresholds: { bash: 2 } }),
+    evaluateRisk: async (options) => {
+      seen.push(options.config.thresholds);
+      return safe;
+    },
+    getApiKey: () => "test-key",
+  });
+  const { ctx } = context();
+
+  await guard({ toolName: "bash", input: { command: "printf ok" } }, ctx);
+  assert.deepEqual(seen[0], {
+    reviewProbability: 0.85,
+    highRiskProbability: 0.9,
+    severityReview: 3,
+  });
+
+  await guard({ toolName: "write", input: { path: "a.ts" } }, ctx);
+  assert.deepEqual(seen[1], {
+    reviewProbability: 0.3,
+    highRiskProbability: 0.35,
+    severityReview: 1,
+  });
+});
+
+test("bash receives the built-in boost when no per-tool level is set", async () => {
+  let seen: unknown;
+  const guard = createToolCallGuard({
+    loadConfig: async () => resolved({ threshold: 8 }),
+    evaluateRisk: async (options) => {
+      seen = options.config.thresholds;
+      return safe;
+    },
+    getApiKey: () => "test-key",
+  });
+  const { ctx } = context();
+
+  await guard({ toolName: "bash", input: { command: "printf ok" } }, ctx);
+  // 8 + 3 clamps to 10
+  assert.deepEqual(seen, {
+    reviewProbability: 0.1,
+    highRiskProbability: 0.15,
+    severityReview: 1,
+  });
+});
